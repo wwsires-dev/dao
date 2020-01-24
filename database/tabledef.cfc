@@ -431,6 +431,10 @@
 		if( structKeyExists(types, arguments.typeID) && types[arguments.typeId] is "timestamp" ){
 			types[ arguments.typeId ] = "datetime";
 		}
+		
+		// HACK: Injection for uniqueidentifier, which is just a varchar
+		if ( typeID == "uniqueidentifier" )
+			types[ arguments.typeId ] = sqltype.varchar;
 
 		return types[ arguments.typeId ];
 	}
