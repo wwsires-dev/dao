@@ -27,6 +27,9 @@
 		records that are to be inserted, or updated.  This object is then
 		passed to a dao function and parsed accordingly.
 
+		@updated 2020.01.24
+		Description: Added support for the UniqueIdentifier data type.
+
 		EXAMPLES:
 			////////////////////////////////////////////////////////////////
 			//This example is a form handler in which the form field names
@@ -82,15 +85,19 @@
 	<cfproperty name="dsn" type="string">
 	<cfproperty name="tableName" type="string">
 	<cfproperty name="isTable" type="boolean">
+	<cfproperty name="TimeToConstruct" type="numeric" default=0>
 	<cfscript>
 
-	public tabledef function init( required string tablename, required string dsn, boolean loadMeta = true ){
+	public tabledef function init( required string tablename, required string dsn, boolean loadMeta = true )
+	{
+		var start = getTickCount();
 		this.instance = {
 				table = queryNew( '' ),
 				name = reReplaceNoCase( arguments.tablename, '[^a-z0-9]', '', 'all' ),
 				tabledef = {},
 				tablemeta.columns = {}
 		};
+		var dev = [ Duplicate( this.instance ), Duplicate( arguments ) ];
 
 		setTableName( arguments.tablename );
 
@@ -101,42 +108,46 @@
 			setIsTable( loadTableMetaData() );
 		}
 
+		SetTimeToConstruct( (getTickCount()-start)/1000 );
+
+		if ( this.getTableName() != arguments.tablename )
+			WriteDump( var=[this.getTableName(), arguments, dev, this, local], expand=true, label="tabledef::#getFunctionCalledName()#::#tablename#", showUDFs=false, abort=true );
+
 		return this;
 	}
 
-	public function addColumn( required string column,
-							   required string type,
-							   string sqlType = arguments.type,
-							   string length = "",
-							   boolean isPrimaryKey = false,
-							   string generator = "",
-							   boolean isIndex = false,
-							   boolean isNullable = true,
-							   string defaultValue = "",
-							   string comment = "",
-							   boolean isDirty = false ){
+	public void function addColumn( required string column,
+		required string type,
+		string sqlType = arguments.type,
+		string length = "",
+		boolean isPrimaryKey = false,
+		string generator = "",
+		boolean isIndex = false,
+		boolean isNullable = true,
+		string defaultValue = "",
+		string comment = "",
+		boolean isDirty = false
+	){
+		var arrPadding = [];
+		if( structKeyExists( this.instance.table, arguments.column ) ){
+			return;
+		}
+		// need to make serializable
+		// Store Column Definition in structure for later use
+		this.instance.tablemeta.columns[ arguments.column ] = {
+			sqltype = arguments.type,
+			type = getValidDataType( arguments.type ),
+			length = arguments.length,
+			isIndex = arguments.isIndex,
+			isPrimaryKey = arguments.isPrimaryKey,
+			isNullable = arguments.isNullable,
+			defaultValue = arguments.defaultValue,
+			generator = arguments.generator,
+			comment = arguments.comment,
+			isDirty = arguments.isDirty
+		};
 
-
-			var arrPadding = [];
-			if( structKeyExists( this.instance.table, arguments.column ) ){
-				return;
-			}
-			// need to make serializable
-			// Store Column Definition in structure for later use
-			this.instance.tablemeta.columns[ arguments.column ] = {
-				sqltype = arguments.type,
-				type = getValidDataType( arguments.type ),
-				length = arguments.length,
-				isIndex = arguments.isIndex,
-				isPrimaryKey = arguments.isPrimaryKey,
-				isNullable = arguments.isNullable,
-				defaultValue = arguments.defaultValue,
-				generator = arguments.generator,
-				comment = arguments.comment,
-				isDirty = arguments.isDirty
-			};
-
-			QueryAddColumn( this.instance.table, arguments.column, getDummyType( arguments.type ), arrPadding );
+		QueryAddColumn( this.instance.table, arguments.column, getDummyType( arguments.type ), arrPadding );
 	}
 
 	public function setColumn( required string column, required any value, required numeric row ){
@@ -431,7 +442,7 @@
 		if( structKeyExists(types, arguments.typeID) && types[arguments.typeId] is "timestamp" ){
 			types[ arguments.typeId ] = "datetime";
 		}
-		
+
 		// HACK: Injection for uniqueidentifier, which is just a varchar
 		if ( typeID == "uniqueidentifier" )
 			types[ arguments.typeId ] = sqltype.varchar;
@@ -480,7 +491,9 @@
 				var columns = railoHacks.getColumns( table = this.getTableName() );
 				var indexqryfull = railoHacks.getColumns( table = this.getTableName() );
 
-			}else{
+			}
+			else
+			{
 				var d = new dbinfo( datasource = this.getDsn() );
 				// NOTE: In CF11 the "pattern" argument is now case sensitive, so we can no longer do:
 				// var tables = d.tables( pattern = this.getTableName() );
@@ -534,8 +547,18 @@
 		<cfset nonprimarykeys = LOCAL['nonprimarykeys_' & this.instance.name]/>
 
 		<!--- This adds the comment column to the table that can be populated later --->
-		<cfset QueryAddColumn(columns,'comment',arrcomments)/>
-
+		<cftry>
+			<cfset QueryAddColumn(columns,'comment',arrcomments)/>
+		<cfcatch type="any">
+			<cfscript>
+				var nativeCache = cacheGetAllIds().reduce( ( prev, key ) => {
+					prev[key] = CacheGet( key );
+					return prev;
+				}, {} );
+			</cfscript>
+			<cfdump var=#[this, arguments, local]# abort="true" showUDfs="false" />
+		</cfcatch>
+		</cftry>
 		<!--- loop through all columns and add a field object for each one --->
 		<cfoutput query="columns">
 			<cfset columnname = columns.column_name>

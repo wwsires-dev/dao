@@ -20,12 +20,15 @@
 *	Component	: dao.cfc
 *	Author		: Abram Adams
 *	Date		: 1/2/2007
-*	@version 0.1.3
+*	@version 0.1.4
 *	@updated 1/5/2018
 *	Description	: Generic database access object that will
 *	control all database interaction.  This component will
 *	invoke database specific functions when needed to perform
 *	platform specific calls.
+*
+*	@updated 2020.01.24
+*	Added ScrubSqlForWrappers() function to clean single ticks and/or [] wrappers from inline SQL.
 *
 *	For instance mysql.cfc has MySQL specific syntax
 *	and routines to perform generic functions like obtaining
@@ -93,7 +96,6 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 	// Adds linq style query functions (i.e. from().where()...)
 	include "linq.cfm";
 
-
 	/**
 	* I initialize DAO
 	* @dsn Data Source Name - If not supplied will use the default datasource specified in Application.cfc
@@ -105,14 +107,15 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 	* @useCFQueryParams Determines if execute queries will use cfqueryparam
 	**/
 	public DAO function init( string dsn = "",
-							  string dbtype = "",
-							  string user = "",
-							  string password ="",
-							  boolean writeTransactionLog = false,
-							  string transactionLogFile = "#expandPath('/')#sql_transaction_log.sql",
-							  boolean useCFQueryParams = true,
-							  boolean autoParameterize = false,
-							  string nullValue = "$null"  ){
+		string dbtype = "",
+		string user = "",
+		string password ="",
+		boolean writeTransactionLog = false,
+		string transactionLogFile = "#expandPath('/')#sql_transaction_log.sql",
+		boolean useCFQueryParams = true,
+		boolean autoParameterize = false,
+		string nullValue = "$null"
+	) {
 		// If DSN wasn't supplied, see if there is a default dsn.
 		if( !len( trim( dsn ) ) ){
 			var = appMetaData = getApplicationMetadata();
@@ -808,6 +811,7 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 						chr( 10 )
 					);
 
+
 				// Clean up any quoted values
 				newTmpSQL = reReplaceNoCase( newTmpSQL, "value=""'(.*?)'(\s*)""", 'value="\1"', "all" );
 
@@ -889,6 +893,7 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 			// Reset tmp struct
 			tmp = {};
 		}
+
 		return LOCAL;
 	}
 
@@ -1002,20 +1007,30 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 		// now parse named params
 		str = reReplaceNoCase( str, '((\s|\t|\(|,):)(?![0-9|\s])(\w[^\{]*?)(?=\s|\)|,|$)','\1\3{}','all');
 		str = reReplaceNoCase( str, '(\s|\t|\(|,):(\w*?)\{(.*?)\}','\1$queryParam(%%%="##arguments.params.\2##",\3)$','all');
-
+		
 		str = reReplace(str,',\)',')','all');
-		if( findNoCase( '##arguments.params', str) ){
+		if ( findNoCase( '##arguments.params', str) )
+		{
 			str = parseNamedParamValues( str, params );
 			str = reReplaceNoCase( str, 'value+(\s*?)=(\s|''|"\s)(.*?)(''|"\s)', '', 'all' );
 			str = reReplaceNoCase( str, '\%\%\%=', 'value=', 'all' );
 			str = reReplaceNoCase( str, '(,+[\s]*,)', ',', 'all' );
-			str = reReplace( str, "=+(\s*)'(.*?)'", '="\2"', 'all' );
+
+			/*
+				The next line of code makes a bold assumption that the SQL engine supports:
+				SET GLOBAL SQL_MODE=ANSI_QUOTES
+				Which is specifically a MySQL thing...let's not piss off SQL Server any more than we have to.
+				A work around is to never code in-line conditions such as WHERE stuff = 'blah', always use named params.
+			*/
+			if ( dbtype == "mysql" )
+				str = str.replaceAll( "=+(\s*)'(.*?)'", "=""\2""" );
 		}
 
 		// put the : back into date values
 		str = reReplace( str, chr(765), ":", "all" );
 		// get rid of empty curlies
 		str = reReplace( str, "{}", "", "all" );
+
 
 		// First we check to see if the string has anything to parse
 		var startPos = findNoCase('$queryparam(',arguments.str,1);
@@ -1029,7 +1044,8 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 		//Append a space for padding, this helps with the last iteration of recursion
 		arguments.str = arguments.str & " ";
 
-		if( startPos ){
+		if ( startPos )
+		{
 			//If so, we'll recursively parse all CF code (code between $'s)
 			startPos 	= startPos + 1;
 			endPos 	= ( find( ')$', arguments.str, startPos ) - startPos )+1;
@@ -1041,11 +1057,13 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 			}
 			// Now let's grab the piece of string to evaluate
 			tmpStartString = mid( arguments.str, 1, startPos - 2 );
+			
 			tmpString = mid( arguments.str, startPos, endPos );
 			tmpEndString = mid( arguments.str, len( tmpStartString ) + endPos + 3, len( arguments.str ) );
 			// A little clean-up
-			tmpString = reReplaceNoCase( tmpString, '&quot;', "'", 'all' );
+			tmpString = reReplaceNoCase( tmpString, "&quot;", "'", "all" );
 			var originalString = tmpString;
+
 			// If queryParam was passed in the SQL, lets' parse it
 			if ( findNoCase( "queryParam", tmpString ) ){
 				// We need to normalize the cfml and to be parsed in order to ensure error free processing.  The
@@ -1074,7 +1092,8 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 				tmpString = reReplaceNoCase( tmpString, "value(\s*?)=(\s*?)(false|true)+",'value="\3"', "all" );
 				tmpString = reReplaceNoCase( tmpString, "value(\s*?)=(\s*?)(\{ts .*?\})+",'value="\3"', "all" );
 
-				tmpArr = listToArray( tmpString, "'" );
+				var tmpArr = listToArray( tmpString, "'" );
+
 				if( !arrayLen( tmpArr ) GT 3 || !arrayLen( tmpArr ) mod 2 ){
 					// Only one set of quotes were found.  Now we can simply remove those.
 					tmpString = reReplaceNoCase( tmpString, "=(\s*?)'(.*?)'", '="\2"', "all" );
@@ -1215,7 +1234,9 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 			var sqlString = qry.getMetadata().getExtendedMetaData().sql;
 		}
 
-		var tablesInQry = reMatchNoCase( "FROM\s+[\[|`|.]*(\w+)[\]|`]*\s+", sqlString & " " );
+		// Added the potential "." qualified table such that dbo.MyView matches correctly.
+		// Modified to accept an EXECUTE command for a SQL Sproc which can return a query object.
+		var tablesInQry = reMatchNoCase( "(EXEC(UTE)?|FROM)\s+[\[|`|.]*([\w\.]+)[\]|`]*\s+", sqlString & " " );
 		if( !tablesInQry.len() ){
 			throw("Unable to determine table name(s) in query");
 		}
@@ -1348,20 +1369,22 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 		string fullCountName = "__fullCount"
 	){
 		var recordCount = qry.recordCount;
-		if( returnFullCount ){
+		if ( returnFullCount )
+		{
 			var fullCount = qry.recordCount;
 			queryAddColumn( qry, fullCountName, listToArray( repeatString( recordCount & ",", fullCount ) ) );
 		}
 
-		if ( offset > 0 ){
+		if ( offset > 0 && qry.recordCount )
+		{
 			// remove first n rows
 			qry.removeRows( javaCast( "int", 0 ), javaCast( "int", ( offset < recordCount ) ? offset : recordCount ) );
 		}
-		if( limit > 0 && qry.recordCount && limit <= qry.recordCount ){
+		if ( limit > 0 && qry.recordCount && limit < qry.recordCount )
+		{
 			// remove last n rows
 			qry.removeRows( javaCast( "int", limit ), javaCast( "int", qry.recordCount - limit ) );
 		}
-
 		return qry;
 	}
 
@@ -1404,7 +1427,6 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 			 any map = "",
 			 boolean forceLowercaseKeys = false
 	){
-
 		var tmpSQL = "";
 		var tempCFSQLType = "";
 		var tempValue = "";
@@ -1413,141 +1435,157 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 		var LOCAL = {};
 		// where is also a function name in this cfc, so let''s localize the arg
 		var _where = isNull( arguments.where ) ? "" : arguments.where;
+		
+		try {
 
-		if( !len( trim( arguments.sql ) ) && !len( trim( arguments.table ) ) ){
-			throw message="You must pass in either a table name or sql statement.";
-		}
-
-		if( listlen( arguments.sql, ' ') EQ 1 && !len( trim( arguments.table ) ) ){
-			arguments.table = arguments.sql;
-		}
-
-		if( len( trim( arguments.sql ) ) || len( trim( arguments.table ) ) ){
-			if( listLen( arguments.sql, ' ') > 1 ){
-
-				// We need to parse the sql
-				// statement to find $queryParam()$ calls.  We do this by
-				// passing the sql to parseQueryParams, which replaces the
-				// $queryParam()$ function call with a pseudo cfqueryparam that
-				// we can digest here to build the query.  The returned pseudo
-				// cfqueryparam tag is structured as follows:
-
-				// cfqueryparam
-				// 			cfsqltype="sql data type"  <--- this is converted
-				// 											to cfsqltype using
-				// 											getCFSQLType
-				// 			value="actual value";
-				// EXAMPLE: $queryParam(value='abc',cfsqltype='varchar')$
-				// This can also be done prior to sending the SQL statement to this
-				// function by calling the queryParam() function directly.
-				// EXAMPLE: #dao.queryParam(value='abc',cfsqltype='varchar')#
-				// This direct method is recommended.
-
-
-				// Now we build the query
-				var tmpSQL = parameterizeSQL( arguments.sql, arguments.params );
-				var sql = "";
-				var paramMap = [];
-				/*
-					Parse out the queryParam calls inside the where statement
-					This has to be done this way because you cannot use
-					cfqueryparam tags outside of a cfquery.
-				 */
-				// Parse out the queryParam calls inside the where statement
-				savecontent variable="sql"{
-					for( var statement in tmpSQL.statements ){
-							var SqlPart = statement.before;
-							writeOutput(preserveSingleQuotes( SqlPart ));
-							if( statement.keyExists( 'cfsqltype' ) ){
-								paramMap.append({ cfsqltype: statement.cfsqltype, value: statement.value, list: statement.isList });
-								writeOutput('?');
-							}
-					}
-					// Honor the order by if passed in
-					if( len( trim( arguments.orderby ) ) ){
-						writeOutput( 'ORDER BY #orderby#' );
-					}
-				};
-
-				var options = {
-					"datasource": variables.dsn,
-					"result": "results_#arguments.name#"
-				};
-				if( len( trim( arguments.cachedWithin ) ) ){
-					options["cachedWithin"] = cachedWithin;
-				}
-				if( QoQ.size() ){
-					// Query of Query
-					var fullCount = QoQ[ listFirst( QoQ.keyList() ) ].recordCount;
-					options["dbtype"] = "query";
-					options["maxrows"] = val(limit) && (!structKeyExists( arguments, 'offset' ) || offset eq 0) ? limit : 2147483647;
-					variables.append( arguments.QoQ );
-				}
-				local[ name ] = queryExecute( sql, paramMap, options );
-				if( !isDefined( 'fullCount' ) ){
-					var fullCount = local[ name ].recordCount;
-				}
-				//  DB Agnostic Limit/Offset for server-side paging
-				if( QoQ.size() && val( limit ) && ( !arguments.keyExists( 'offset' ) || offset == 0 ) && !LOCAL[ name ].keyExists( '__fullCount ' ) ){
-					queryAddColumn( LOCAL[ name ], '__fullCount', listToArray( repeatString( fullCount & ",", LOCAL[ name ].recordCount ) ) );
-				}else
-				if( !QoQ.size() && len( trim( limit ) ) && len( trim( offset ) ) ){
-					LOCAL[ name ] = pageRecords( LOCAL[ name ], offset, limit );
-				}
-
-			}else{
-				// Query by table
-				// abstract
-				LOCAL[arguments.name] = getConn().select(
-													table = table,
-													columns = columns,
-													name = name,
-													where = _where,
-													orderby = orderby,
-													limit = limit,
-													offset = offset,
-													cachedwithin = cachedwithin
-												);
+			if( !len( trim( arguments.sql ) ) && !len( trim( arguments.table ) ) ){
+				throw message="You must pass in either a table name or sql statement.";
 			}
 
-
-			if( !structKeyExists( LOCAL, arguments.name ) ){
-				throw( errorcode="882", type="DAO.Read.InvalidQueryType", detail="Invalid Query Type for ""DAO.read()""", message="The query was either invalid or was an insert statement.  Use DAO.Execute() for insert statements." );
+			if( listlen( arguments.sql, ' ') EQ 1 && !len( trim( arguments.table ) ) ){
+				arguments.table = arguments.sql;
 			}
-			if( arguments.returnType == 'array' ){
-				return queryToArray( qry = LOCAL[arguments.name], map = map, forceLowercaseKeys = forceLowercaseKeys, returnEmptyStruct = returnEmptyStruct );
-			}else if( arguments.returnType eq 'json' ){
-				return queryToJSON( qry = LOCAL[arguments.name], map = map, forceLowercaseKeys = forceLowercaseKeys, returnEmptyStruct = returnEmptyStruct );
-			}else{
-				var isNullisClosureValue = !isNull( map ) && isClosure( map );
-				LOCAL.columns = listToArray( LOCAL[ arguments.name ].columnList );
-				if( isNullisClosureValue ){
-					var i = 0;
-					for( var rec in LOCAL[ arguments.name ] ){
-						i++;
-						var tmpRec = map( row = rec, index = i, cols = LOCAL.columns );
-						// If the return value is not a row struct, it means it was deleted.
-						// This really should be abstracted to a "reduce" function, but I think
-						// it's worth adding to map in this context
-						if( !isDefined( 'tmpRec' ) || !isStruct( tmpRec ) ) {
-							queryDeleteRow( LOCAL[ arguments.name ], i );
-							continue;
+
+			if( len( trim( arguments.sql ) ) || len( trim( arguments.table ) ) ){
+				if( listLen( arguments.sql, ' ') > 1 ){
+
+					// We need to parse the sql
+					// statement to find $queryParam()$ calls.  We do this by
+					// passing the sql to parseQueryParams, which replaces the
+					// $queryParam()$ function call with a pseudo cfqueryparam that
+					// we can digest here to build the query.  The returned pseudo
+					// cfqueryparam tag is structured as follows:
+
+					// cfqueryparam
+					// 			cfsqltype="sql data type"  <--- this is converted
+					// 											to cfsqltype using
+					// 											getCFSQLType
+					// 			value="actual value";
+					// EXAMPLE: $queryParam(value='abc',cfsqltype='varchar')$
+					// This can also be done prior to sending the SQL statement to this
+					// function by calling the queryParam() function directly.
+					// EXAMPLE: #dao.queryParam(value='abc',cfsqltype='varchar')#
+					// This direct method is recommended.
+
+					// Now we build the query
+					var tmpSQL = parameterizeSQL( arguments.sql, arguments.params );
+					var sql = "";
+					var paramMap = [];
+					/*
+						Parse out the queryParam calls inside the where statement
+						This has to be done this way because you cannot use
+						cfqueryparam tags outside of a cfquery.
+					 */
+					// Parse out the queryParam calls inside the where statement
+					savecontent variable="sql"{
+						for( var statement in tmpSQL.statements ){
+								var SqlPart = statement.before;
+								writeOutput(preserveSingleQuotes( SqlPart ));
+								if( statement.keyExists( 'cfsqltype' ) ){
+									paramMap.append({ cfsqltype: statement.cfsqltype, value: statement.value, list: statement.isList });
+									writeOutput('?');
+								}
 						}
-						rec = duplicate(tmpRec);
-						// Add any cols that may have been added during the map transformation
-						var newCols = rec.keyList().listToArray();
-						for( var newCol in newCols ){
-							if( !queryColumnExists( LOCAL[ arguments.name ], newCol ) ){
-								queryAddColumn( LOCAL[ arguments.name ], newCol, rec );
+						// Honor the order by if passed in
+						if( len( trim( arguments.orderby ) ) ){
+							writeOutput( 'ORDER BY #orderby#' );
+						}
+					};
+
+					var options = {
+						"datasource": variables.dsn,
+						"result": "results_#arguments.name#"
+					};
+					if( len( trim( arguments.cachedWithin ) ) ){
+						options["cachedWithin"] = cachedWithin;
+					}
+					if( QoQ.size() ){
+						// Query of Query
+						var fullCount = QoQ[ listFirst( QoQ.keyList() ) ].recordCount;
+						options["dbtype"] = "query";
+						variables.append( arguments.QoQ );
+					}
+
+					// Not sure why this was only applied inside the QoQ.  An oversight perhaps?
+					// Apply max rows when a page size (offset) is NOT specified.
+					if ( Val(limit) && (!arguments.keyExists("offset") || !Val(offset) ) )
+						options["maxrows"] = Val(limit);	//  && (!arguments.keyExists("offset") || !Val(offset) ) ? limit : 2147483647
+
+					/* By now, we've constructed a valid SQL string.  We really need to scrub the string for environment MySQL|Sql */
+					sql = ScrubSqlForWrappers( sql );
+					local[ name ] = queryExecute( sql, paramMap, options );
+					if ( IsNull( fullCount ) )
+						var fullCount = local[ name ].recordCount;
+
+					//  DB Agnostic Limit/Offset for server-side paging
+					if( QoQ.size() && val( limit ) && ( !arguments.keyExists( 'offset' ) || offset == 0 ) && !LOCAL[ name ].keyExists( '__fullCount ' ) ){
+						queryAddColumn( LOCAL[ name ], '__fullCount', listToArray( repeatString( fullCount & ",", LOCAL[ name ].recordCount ) ) );
+					}else
+					if( !QoQ.size() && len( trim( limit ) ) && len( trim( offset ) ) ){
+						LOCAL[ name ] = pageRecords( LOCAL[ name ], offset, limit );
+					}
+
+				}else{
+					// Query by table
+					// abstract
+					LOCAL[arguments.name] = getConn().select(
+						table = table,
+						columns = columns,
+						name = name,
+						where = _where,
+						orderby = orderby,
+						limit = limit,
+						offset = offset,
+						cachedwithin = cachedwithin
+					);
+				}
+
+
+				if( !structKeyExists( LOCAL, arguments.name ) ){
+					throw( errorcode="882", type="DAO.Read.InvalidQueryType", detail="Invalid Query Type for ""DAO.read()""", message="The query was either invalid or was an insert statement.  Use DAO.Execute() for insert statements." );
+				}
+				if( arguments.returnType == 'array' ){
+					return queryToArray( qry = LOCAL[arguments.name], map = map, forceLowercaseKeys = forceLowercaseKeys, returnEmptyStruct = returnEmptyStruct );
+				}else if( arguments.returnType eq 'json' ){
+					return queryToJSON( qry = LOCAL[arguments.name], map = map, forceLowercaseKeys = forceLowercaseKeys, returnEmptyStruct = returnEmptyStruct );
+				}else{
+					var isNullisClosureValue = !isNull( map ) && isClosure( map );
+					LOCAL.columns = listToArray( LOCAL[ arguments.name ].columnList );
+					if( isNullisClosureValue ){
+						var i = 0;
+						for( var rec in LOCAL[ arguments.name ] ){
+							i++;
+							var tmpRec = map( row = rec, index = i, cols = LOCAL.columns );
+							// If the return value is not a row struct, it means it was deleted.
+							// This really should be abstracted to a "reduce" function, but I think
+							// it's worth adding to map in this context
+							if( !isDefined( 'tmpRec' ) || !isStruct( tmpRec ) ) {
+								queryDeleteRow( LOCAL[ arguments.name ], i );
+								continue;
 							}
-							var col = forceLowercaseKeys ? newCol.lcase() : newCol;
-							querySetCell( LOCAL[ arguments.name ], col, rec[ col ], i );
+							rec = duplicate(tmpRec);
+							// Add any cols that may have been added during the map transformation
+							var newCols = rec.keyList().listToArray();
+							
+							for( var newCol in newCols ){
+								if( !queryColumnExists( LOCAL[ arguments.name ], newCol ) ){
+									queryAddColumn( LOCAL[ arguments.name ], newCol, rec );
+								}
+								var col = forceLowercaseKeys ? newCol.lcase() : newCol;
+								querySetCell( LOCAL[ arguments.name ], col, rec[ col ], i );
+							}
 						}
 					}
+					return LOCAL[ arguments.name ];
 				}
-				return LOCAL[ arguments.name ];
 			}
+
 		}
+		catch (any ex) {
+			WriteDump(var=[arguments, local], label=getFunctionCalledName(), showUDFs=false, abort=false );
+			rethrow;
+		}
+
 	}
 
 	/**
@@ -1751,5 +1789,35 @@ component displayname="DAO" hint="This component is basically a DAO Factory that
 		}
 
 		return ret;
+	}
+
+
+	/**
+	* Replace any enforced qualifying wrappers in the case of MySQL vs. MSSql
+	* SQL and MySQL use their own qualifying wrappers [] and ``, and each will error with the other.
+	* This is a hack, at best, but until we move away from inline SQL, it's a necessity.
+	* @sql Required string, the SQL that will be scrubbed
+	**/
+	private string function ScrubSqlForWrappers( required string sql )
+	{
+		/* By now, we've constructed a valid SQL string.  We really need to scrub the string for environment MySQL|Sql */
+		var tmpSql = sql;
+		/*
+		var devSql = {
+			"mssql": sql.replaceAll( "`(.*?)`", "\[$1\]" ),
+			"mysql": sql.replaceAll( "\[(.*?)\]", "`$1`" )
+		};
+
+		if ( tmpSql contains "pedigree" )
+			WriteDump( var=[local, arguments], label=getFunctionCalledName(), abort=true, showUDFs=false );
+		*/
+
+		if ( dbtype == "mssql" )
+			return tmpSql.replaceAll( "`(.*?)`", "\[$1\]" );	// Replace ` tilda wrappers with [] bracket wrappers.
+		else if ( dbtype == "mysql" )
+			return tmpSql.replaceAll( "\[(.*?)\]", "`$1`" );	// Replace [] bracket wrappers with ` tilda wrappers.
+
+		// Catch-all, just in case there's another DB Engine down the line.
+		return sql;
 	}
 }

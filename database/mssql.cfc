@@ -117,6 +117,7 @@
 
 		<cfset var get = "" />
 		<cfset var idx = "" />
+		<cfset var start = getTickCount() />
 		<cfif listlen( arguments.sql, ' ') EQ 1 && !len( trim( arguments.table ) )>
 			<cfset arguments.table = arguments.sql/>
 		</cfif>
@@ -124,7 +125,7 @@
 		<cftry>
 			<cfif listlen(trim(arguments.sql), ' ') GT 1>
 				<cfif len(trim(arguments.cachedwithin))>
-					<cfquery name="get" datasource="#getDsn()#" cachedwithin="#arguments.cachedwithin#">
+					<cfquery name="get" datasource="#getDsn()#" cachedwithin="#arguments.cachedwithin#" result="meta">
 						<!--- #preserveSingleQuotes(arguments.sql)# --->
 						<!---
 							Parse out the queryParam calls inside the where statement
@@ -145,7 +146,7 @@
 						<!--- /Parse out the queryParam calls inside the where statement --->
 					</cfquery>
 				<cfelse>
-					<cfquery name="get" datasource="#getDsn()#">
+					<cfquery name="get" datasource="#getDsn()#" result="meta">
 						<!--- #preserveSingleQuotes(arguments.sql)# --->
 						<!---
 							Parse out the queryParam calls inside the where statement
@@ -178,7 +179,7 @@
 					<cfset arguments.columns = getSafeColumnNames(getDao().getColumns(arguments.table))/>
 				</cfif>
 				<cfif len(trim(arguments.cachedwithin))>
-					<cfquery name="get" datasource="#getDsn()#" cachedwithin="#arguments.cachedwithin#">
+					<cfquery name="get" datasource="#getDsn()#" cachedwithin="#arguments.cachedwithin#" result="meta">
 
 						SELECT #arguments.columns#
 						FROM (
@@ -212,31 +213,31 @@
 						</cfif>
 					</cfquery>
 				<cfelse>
-					<cfquery name="get" datasource="#getDsn()#">
+					<cfquery name="get" datasource="#getDsn()#" result="meta">
 						SELECT #arguments.columns#
 							FROM (
 								SELECT ROW_NUMBER() OVER(ORDER BY #( len( trim( arguments.orderby ) ) ? arguments.orderby : getDao().getPrimaryKey( arguments.table )['field'] )#) as [__fullCount], #arguments.columns#
 								FROM #arguments.table#
 								<cfif len( trim( arguments.where ) )>
-								<!---
-									Parse out the queryParam calls inside the where statement
-									This has to be done this way because you cannot use
-									cfqueryparam tags outside of a cfquery.
-									@TODO: refactor to use the query.cfc
-								--->
-								<cfset var tmpSQL = getDao().parameterizeSQL( arguments.where )/>
-								<cfloop from="1" to="#arrayLen( tmpSQL.statements )#" index="idx">
-									#tmpSQL.statements[idx].before#
-									<cfif structKeyExists( tmpSQL.statements[idx], 'cfsqltype' )>
-										<cfqueryparam
-											cfsqltype="#tmpSQL.statements[idx].cfSQLType#"
-											value="#tmpSQL.statements[idx].value#"
-											list="#tmpSQL.statements[idx].isList#">
-									</cfif>
-								</cfloop>
-								<!--- /Parse out the queryParam calls inside the where statement --->
+									<!---
+										Parse out the queryParam calls inside the where statement
+										This has to be done this way because you cannot use
+										cfqueryparam tags outside of a cfquery.
+										@TODO: refactor to use the query.cfc
+									--->
+									<cfset var tmpSQL = getDao().parameterizeSQL( arguments.where )/>
+									<cfloop from="1" to="#arrayLen( tmpSQL.statements )#" index="idx">
+										#tmpSQL.statements[idx].before#
+										<cfif structKeyExists( tmpSQL.statements[idx], 'cfsqltype' )>
+											<cfqueryparam
+												cfsqltype="#tmpSQL.statements[idx].cfSQLType#"
+												value="#tmpSQL.statements[idx].value#"
+												list="#tmpSQL.statements[idx].isList#">
+										</cfif>
+									</cfloop>
+									<!--- /Parse out the queryParam calls inside the where statement --->
 								</cfif>
-								) #arguments.table#
+								) #arguments.table.replaceAll("\W", "")#
 
 							<cfif val( arguments.limit ) GT 0>
 								WHERE [__fullCount] BETWEEN #val( arguments.offset )# AND #val( arguments.limit )#
@@ -249,11 +250,12 @@
 			</cfif>
 
 			<cfcatch type="any">
-				<cfdump var="#arguments#" label="Arguments passed to select()">
-				<cfdump var="#cfcatch#" label="CFCATCH Information">
-				<!---<cfdump var="#evaluate(arguments.name)#" label="Query results">--->
-				<cfsetting showdebugoutput="false">
-				<cfabort>
+				<cfdump var="#arguments#" label="Arguments passed to select()" />
+				<cfdump var="#request.user#" label="User Data" />
+				<cfdump var="#Local#" label="Local variables in select()" />
+				<cfdump var="#cfcatch#" label="CFCATCH Information" />
+				<cfsetting showdebugoutput="false" />
+				<cfabort/>
 			</cfcatch>
 		</cftry>
 		<cfreturn get />

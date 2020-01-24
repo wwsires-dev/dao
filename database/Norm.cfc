@@ -56,6 +56,9 @@ component accessors="true" output="false" {
 	property name="dao" type="dao" norm_persistent="false";
 	property name="tabledef" type="tabledef" norm_persistent="false";
 
+
+	property name="TimeElapsed" type="numeric" default=0 norm_persistent="false";
+
 	// Some "private" variables
 	_isNew = true;
 	_isDirty = false;
@@ -72,32 +75,38 @@ component accessors="true" output="false" {
 	include "oData.cfm";
 
 
-	public any function init( 	string table = "",
-								string parentTable = "",
-								string idField = "ID",
-								string idFieldType = "",
-								string idFieldGenerator = "",
-								numeric deleteStatusCode = 1,
-								any dao = "",
-								boolean dropcreate = false,
-								boolean createTableIfNotExist = false,
-								struct dynamicMappings = {},
-								string dynamicMappingFKConvention = "{table}_ID",
-								array excludedEntities = [],
-								boolean autoWire = true,
-								boolean cacheEntities = false, /* 2015-1-19 still experimental DO NOT USE */
-								boolean debugMode = false,
-								boolean threaded = true,
-								numeric oDataVersion = 3,
-								string oDataBaseUri = "/",
-								any cachedWithin = createTimeSpan( 0, 0, 0, 2 ) ){
+	public any function init(
+		string table = "",
+		string parentTable = "",
+		string idField = "ID",
+		string idFieldType = "",
+		string idFieldGenerator = "",
+		numeric deleteStatusCode = 1,
+		any dao = "",
+		boolean dropcreate = false,
+		boolean createTableIfNotExist = false,
+		struct dynamicMappings = {},
+		string dynamicMappingFKConvention = "{table}_ID",
+		array excludedEntities = [],
+		boolean autoWire = true,
+		boolean cacheEntities = false, /* 2015-1-19 still experimental DO NOT USE */
+		boolean debugMode = false,
+		boolean threaded = true,
+		numeric oDataVersion = 3,
+		string oDataBaseUri = "/",
+		any cachedWithin = createTimeSpan( 0, 0, 0, 2 )
+	) {
+
+
+		var copyOfArgs = Duplicate( arguments );
+		var start = GetTickCount();
 		var LOCAL = {};
 		set__FromCache( false );
 		set__cacheEntities( cacheEntities );
 		if( get__cacheEntities() && !__cacheEnabled() ){
 			set__cacheEntities( false );
 		}
-        // If true, will tell // logIt() to actually write to log.
+		// If true, will tell // logIt() to actually write to log.
 		set__debugMode( debugMode );
 		set__threaded( threaded );
 
@@ -126,15 +135,15 @@ component accessors="true" output="false" {
 		setDropcreate( dropcreate );
 		setCreateTableIfNotExist( createTableIfNotExist );
 		// used to introspect the given table.
-        variables.meta = _getMetaData();
-        // Convenience properties so developers can find out which version they are using.
-        if( structKeyExists( variables.meta.extends, 'version' ) ){
-	        set_Norm_Version( variables.meta.extends.version );
-	        set_Norm_Updated( variables.meta.extends.updated );
-        }else if( structKeyExists( variables.meta, 'version' ) ){
-	        set_Norm_Version( variables.meta.version );
-	        set_Norm_Updated( variables.meta.updated );
-        }
+		variables.meta = _getMetaData();
+		// Convenience properties so developers can find out which version they are using.
+		if( structKeyExists( variables.meta.extends, 'version' ) ){
+			set_Norm_Version( variables.meta.extends.version );
+			set_Norm_Updated( variables.meta.extends.updated );
+		}else if( structKeyExists( variables.meta, 'version' ) ){
+			set_Norm_Version( variables.meta.version );
+			set_Norm_Updated( variables.meta.updated );
+		}
 
 		if( !len( trim( arguments.table ) ) ){
 			// If the table name was not passed in, see if the table property was set on the component
@@ -145,7 +154,7 @@ component accessors="true" output="false" {
 				setTable( variables.meta.extends.table );
 			// If not, use the component's name as the table name
 			}else if( structKeyExists( variables.meta, 'fullName' ) ){
-                setTable( listLast( variables.meta.fullName, '.') );
+		setTable( listLast( variables.meta.fullName, '.') );
 			}else{
 				throw('Argument: "Table" is required if the component declaration does not indicate a table.','variables','If you don''t pass in the table argument, you must specify the table attribute of the component.  I.e.  component table="table_name" {...}');
 			}
@@ -193,6 +202,7 @@ component accessors="true" output="false" {
 				}
 			}
 		}
+
 		// Setup the ID (primary key) field.  This can be used to generate id values, etc..
 		setIDField( variables.tabledef.hasColumn( arguments.IDField ) ? arguments.IDField : variables.tabledef.getPrimaryKeyColumn() );
 		setIDFieldType( variables.tabledef.getDummyType( variables.tabledef.getColumnType( getIDField() ) ) );
@@ -205,11 +215,12 @@ component accessors="true" output="false" {
 		// This will allow us to dynamically stub out the entity "class".  So one could just create a
 		// CFC without any properties, then point it to a table and get a fully instantiated entity, or they
 		// could directly instantiate Norm and pass it a table name and get a fully instantiated entity.
-
 		var found = false;
-
+		var notFoundCount = [];
+		start = getTickCount();
 		// We'll loop through each column in the table definition and see if we have a property, if not, create one.
-		for( var col in variables.tabledef.instance.tablemeta.columns ){
+		for( var col in variables.tabledef.instance.tablemeta.columns )
+		{
 			var colName = _alias( col );
 			for ( var existingProp in variables.meta.properties ){
 				if ( ( structKeyExists( existingProp, 'column' ) && existingProp.column EQ col )
@@ -218,25 +229,29 @@ component accessors="true" output="false" {
 					|| ( structKeyExists( existingProp, 'name' ) && existingProp.name EQ colName ) ){
 					//property exists skip to the next column
 					found = true;
-					break;
+					continue;
 				}
 			}
 			// table column didn't exist as a property, let's add it.
-			if ( !found ){
-
+			if ( !found )
+			{
+				var inside = getTickCount();
 				variables[ col ] = this[ col ] = "";
 				// _setter/_getter are generic setters/getters that allow us to do things like dirty checking
 				variables["set" & col] = this["set" & col] = this.methods["set" & col] = _setter;
 				variables["get" & col] = this["get" & col] = this.methods["get" & col] = _getter;
 				// if set to autowire, we'll check for any entity mappings and set those up now.
+				// That horrid _getMapping() function is fine for table names, but not for columns.
 				var mapping = getAutoWire()
-					? _getMapping( colName )
+					// ? _getMapping( colName )
+					? GetColumnMapping( colName )
 					: structKeyExists( getDynamicMappings(), colName )
 						? _getMapping(
 								structKeyExists( getDynamicMappings()[ colName ], 'table' )
 									? getDynamicMappings()[ colName ]['table']
 									: getDynamicMappings()[ colName ] )
 						: { property: col, table: colName, 'createdBy': "autoWire" };
+
 				var newProp = {
 					"name": mapping.property,
 					"column": col,
@@ -247,7 +262,8 @@ component accessors="true" output="false" {
 				};
 				if( structKeyExists( getDynamicMappings(), col ) ){
 					var tableDef = _loadTableDef( mapping.table );
-					if( tableDef.getIsTable() && !arrayFindNoCase( getExcludedEntities(), mapping.table) ){
+					if ( tableDef.getIsTable() && !arrayFindNoCase( getExcludedEntities(), mapping.table ) )
+					{
 						newProp["table"] = mapping.table;
 						newProp["fkcolumn"] = col;
 					}
@@ -264,6 +280,8 @@ component accessors="true" output="false" {
 				if( !structIsEmpty( newProp ) ){
 					arrayAppend( variables.meta.properties, newProp );
 				}
+
+				notFoundCount.append( ( getTickCount() - inside) / 1000 );
 			}
 
 			found = false;
@@ -272,12 +290,14 @@ component accessors="true" output="false" {
 				resolveChildEntity( col );
 			}
 		}
+
+
 		// }
 
-     /**
-     * This will hijack all of the setters and inject a function that will set the
-     * isDirty flag to true anytime data changes
-     **/
+		/**
+		* This will hijack all of the setters and inject a function that will set the
+		* isDirty flag to true anytime data changes
+		**/
 		// var setter = _setter;
 		for ( var prop in variables.meta.properties ){
 			if( ( !structKeyExists( prop, 'setter' ) || prop.setter )
@@ -307,7 +327,7 @@ component accessors="true" output="false" {
 				}
 			}
 		}
-	    return this;
+		return this;
 	}
 
 	/**
@@ -370,7 +390,6 @@ component accessors="true" output="false" {
 		if( get__cacheEntities() ){
 			cachePut( "#this.getDao().getDsn()#-tabledef-#table#", tableDef, createTimeSpan( 0, 0, 30, 0 ) );
 		}
-
 		return tableDef;
 	}
 	/**
@@ -381,7 +400,7 @@ component accessors="true" output="false" {
 		variables[ name ] = val;
 		this[ name ] = val;
 		var exists = variables.meta.properties.find( function( a ){
-		    return a.name == name;
+			return a.name == name;
 		});
 		if( exists ){
 			arrayDeleteAt(variables.meta.properties, exists );
@@ -927,6 +946,7 @@ component accessors="true" output="false" {
 					return getDao().queryToArray( record );
 				}
 				var tmpNewEntity = $new( dao = this.getDao(), table = this.getTable() );
+
 				if( get__threaded() && 1==0 ){
 					var threads = "";
 					for ( var rec = 1; rec <= recCount; rec++ ){
@@ -1976,6 +1996,95 @@ component accessors="true" output="false" {
 		return this;
 	}
 
+
+	/**
+	* Refactored out of _getMapping(), returns a struct, mapping, representing this columns meta data.
+	* Not a table, so we'll see if the "table" argument matches any keys in the dynamic mappings.
+	* This is used to find a mapping for a foriegn key (column) to a given table.
+	* Iterate over mappings and look-up properties to find the key
+	* @column The name of the column for which we are building this mapping.
+	**/
+	private any function GetColumnMapping( required string column )
+	{
+		var start = getTickCount();
+		var mapping = {
+			"table" = column,
+			"property" = column,
+			"key" = column,
+			"addedBy": "tabledef"
+		};
+
+		// Not a table, so we'll see if the "table" argument matches any keys in the dynamic mappings.
+		// This is used to find a mapping for a foriegn key to a given table.
+		// logIt('iterating each in "#structKeyList( getDynamicMappings())#"');
+		// iterate mappings and look-up properties to find the key
+		for( var map in getDynamicMappings() )
+		{
+			// logIt("find mappings for #map#");
+
+			if ( isStruct( getDynamicMappings()[ map ] )
+				&& structKeyExists( getDynamicMappings()[ map ], "property" )
+				&& getDynamicMappings()[ map ].property == column )
+			{
+				// logIt('table that was passed in (#table#) was found as a property in a dynamic mapping.  Using that to create new mapping', true);
+				var tableDef = _loadTableDef( column );
+				return {
+					'table': getDynamicMappings()[ map ].table,
+					'property': _alias( getDynamicMappings()[ map ].property ),
+					'key': map,
+					'IDField': tableDef.getPrimaryKeyColumn(),
+					'tableDef': tableDef,
+					'addedBy': 'getMapping:not a table'
+				};
+
+			}
+			else
+			{
+				// logIt("_save could not find mappings for #table#::: #getDynamicMappingFKConvention()#");
+				// we can be smart an look for more dynamic mappings based on naming convention
+
+				// TODO: Possible technical debt, I'm not convinced that this condition is ever met.
+				if ( len( trim( getDynamicMappingFKConvention() ) ) )
+				{
+					// var tableDef = _loadTableDef( table );
+					// logIt('----Dynamic Mapping FK naming convention defined for #table#.  Looking for matches.', true);
+					var regex = reReplaceNoCase( getDynamicMappingFKConvention(), '(.*?){table}(.*)', '^\1(\w*?)\2$', 'all' );
+					// If we found a field name with tihs signature, let's add the mapping
+					if ( arrayLen( reMatch( regex, column ) ) )
+					{
+						// logIt('Found Dynamic Mapping FK naming convention match for entity #table#.', true);
+						var parentTable = reReplaceNoCase( column, regex, '\1', 'all' );
+						if ( len( trim( parentTable ) ) )
+						{
+							// _getMapping( parentTable );
+							var parentTableDef = _loadTableDef( parentTable );
+							parentTable = parentTableDef.getTableName();
+							// only add the mapping if it is to a real table
+							// logIt('...is #parentTable# a table? #parentTableDef.getIsTable()#', true);
+							if ( parentTableDef.getIsTable() )
+							{
+								// logIt('#parentTable# with a pk col: #parentTableDef.getPrimaryKeyColumn()#', true);
+								var parentMapping = {
+									'table': parentTable,
+									'property': _alias( parentTable ),
+									'key': column,
+									'IDField': parentTableDef.getPrimaryKeyColumn(),
+									'tableDef': parentTableDef,
+									'addedBy': 'getMapping:not a table, but naming convention'
+								};
+								// addDynamicMappings( field, parentMapping );
+								addDynamicMappings( parentTable, parentMapping );
+								mapping = parentMapping;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return mapping;
+	}
+
 	/**
 	* I return the field/relationship mapping for a given table or property
 	* NOTE: getIDField() will get the current entity ID field, not
@@ -1992,9 +2101,9 @@ component accessors="true" output="false" {
 	**/
 	private any function _getMapping( required string table ){
 
+		var start = getTickCount();
 		var tableDef = _loadTableDef( table );
-			var mapping = { 'table' = table, 'property' = table, 'key' = table, 'addedBy': "tabledef" };
-
+		var mapping = { 'table' = table, 'property' = table, 'key' = table, 'addedBy': "tabledef" };
 		if( arrayFindNoCase( getExcludedEntities(), table ) ){
 			return mapping;
 		}
@@ -2032,7 +2141,8 @@ component accessors="true" output="false" {
 		  	// Let's see if the passed in table is a real table and if so create a generic mapping and return it.
 
 			// logIt('is #table# a table? #tableDef.getIsTable()#', true);
-			if( tableDef.getIsTable() && !arrayFindNoCase( getExcludedEntities(), tableDef.getTableName() ) ){
+			if( tableDef.getIsTable() && !arrayFindNoCase( getExcludedEntities(), tableDef.getTableName() ) )
+			{
 				var propertyName = _alias( table );
 				var _table = tableDef.getTableName();
 				// passed in table was actually a table, now map it.
@@ -2052,17 +2162,21 @@ component accessors="true" output="false" {
 					// // logIt('Dynamic Mapping FK naming convention defined for #_table#.  Looking for matches.');
 					var regex = reReplaceNoCase( getDynamicMappingFKConvention(), '(.*?){table}(.*)', '^\1(\w*?)\2$', 'all' );
 					var fields = listToArray( tableDef.getColumns() );
-					for( var field in fields ){
+					for( var field in fields )
+					{
 						// If we found a field name with tihs signature, let's add the mapping
-						if( arrayLen( reMatch( regex, field ) ) ){
+						if ( arrayLen( reMatch( regex, field ) ) )
+						{
 							// // logIt('Found Dynamic Mapping FK naming convention match "#field#" for entity #_table#.');
 							var parentTable = reReplaceNoCase( field, regex, '\1', 'all' );
-							if( len( trim( parentTable ) ) ){
+							if ( len( trim( parentTable ) ) )
+							{
 								// _getMapping( parentTable );
 								var parentTableDef = _loadTableDef( parentTable );
 								parentTable = parentTableDef.getTableName();
 								// only add the mapping if it is to a real table
 								// // logIt('...is #parentTable# a table? #parentTableDef.getIsTable()#');
+
 								if( parentTableDef.getIsTable() ){
 									// // logIt('#parentTable# with a pk col: #parentTableDef.getPrimaryKeyColumn()#');
 									var parentMapping = {
@@ -2082,12 +2196,17 @@ component accessors="true" output="false" {
 					}
 				}
 
-			}else{
+			}
+			else
+			{
 				// Not a table, so we'll see if the "table" argument matches any keys in the dynamic mappings.
 				// This is used to find a mapping for a foriegn key to a given table.
 				// logIt('iterating each in "#structKeyList( getDynamicMappings())#"');
 				// iterate mappings and look-up properties to find the key
-				for( var map in getDynamicMappings() ){
+				return GetColumnMapping( table );
+				/*
+				for( var map in getDynamicMappings() )
+				{
 					// logIt("find mappings for #map#");
 
 					if( isStruct( getDynamicMappings()[ map ] )
@@ -2142,6 +2261,7 @@ component accessors="true" output="false" {
 						}
 					}
 				}
+				*/
 				// logIt('mappings for #table#: #structKeyList( mapping )#: #mapping.table#, #mapping.property#', true);
 
 
@@ -2168,9 +2288,10 @@ component accessors="true" output="false" {
 		}
 		return property;
 	}
-	public function addDynamicMappings( required string name, required struct mapping ){
+	public void function addDynamicMappings( required string name, required struct mapping ){
 		var existingMapping = this.getDynamicMappings();
-		if( !structKeyExists( existingMapping, name ) && name != getTable() ){
+		if ( !structKeyExists( existingMapping, name ) && name != getTable() )
+		{
 			mapping.addedBy = "addDynamicMappings";
 			existingMapping[ name ] = mapping;
 			setDynamicMappings( existingMapping );
@@ -2234,13 +2355,13 @@ component accessors="true" output="false" {
 	* is specified I will return the record matching that ID.  If not, I will return
 	* the record of the currently instantiated entity.
 	**/
-    // public query function get( any ID ){
-    //     return getRecord( ID );
-    // }
+	// public query function get( any ID ){
+	//	 return getRecord( ID );
+	// }
 
-    /**
-    * The 'where' argument should be the entire SQL where clause, i.e.: "where a=queryParam(b) and b = queryParam(c)"
-    **/
+	/**
+	* The 'where' argument should be the entire SQL where clause, i.e.: "where a=queryParam(b) and b = queryParam(c)"
+	**/
 	public any function list(
 		string columns = "",
 		string where,
@@ -2260,7 +2381,7 @@ component accessors="true" output="false" {
 		var cols = replaceList( lcase( arguments.columns ), lcase( arrayToList( arguments.excludeKeys ) ) , "" );
 		cols = reReplace( cols, "\#this.getDao().getSafeIdentifierStartChar()#\#this.getDao().getSafeIdentifierEndChar()#", "", "all" );
 		cols = arrayToList( listToArray( cols, ',', false ) );
-		arguments.table = this.getTable();
+		arguments.table = arguments.table ?: this.getTable();
 		arguments.name = hash( createUUID() );
 		arguments.columns = cols;
 		var record = variables.dao.read( argumentCollection:arguments );
@@ -2271,35 +2392,35 @@ component accessors="true" output="false" {
 	/**
 	* I return a JSON array of structs representing the records matching the specified criteria; one record per array indicie.
 	**/
-  public string function listAsJSON(
-		string where = "",
-		string columns = "",
-		string limit = "",
-		string orderby = "",
-		numeric row = 0,
-		string offset = "",
-		array excludeKeys = [],
-		any map = "",
-		boolean forceLowercaseKeys = false
-	){
-		return serializeJSON(
-							listAsArray(
-								where = where,
-								columns = columns,
-								limit = limit,
-								orderby = orderby,
-								row = row,
-								offset = offset,
-								excludeKeys = excludeKeys,
-								map = map,
-								forceLowercaseKeys = forceLowercaseKeys
-							)
+	public string function listAsJSON(
+			string where = "",
+			string columns = "",
+			string limit = "",
+			string orderby = "",
+			numeric row = 0,
+			string offset = "",
+			array excludeKeys = [],
+			any map = "",
+			boolean forceLowercaseKeys = false
+		){
+			return serializeJSON(
+				listAsArray(
+					where = where,
+					columns = columns,
+					limit = limit,
+					orderby = orderby,
+					row = row,
+					offset = offset,
+					excludeKeys = excludeKeys,
+					map = map,
+					forceLowercaseKeys = forceLowercaseKeys
+				)
 			);
-  }
-  /**
-  * Returns a CF array of structs representing the records matching the specified criteria; one record per array indicie.
-  **/
-  public array function listAsArray(
+	}
+	/**
+	* Returns a CF array of structs representing the records matching the specified criteria; one record per array indicie.
+	**/
+	public array function listAsArray(
 		string where = "",
 		string columns = "",
 		string limit = "",
@@ -2311,29 +2432,19 @@ component accessors="true" output="false" {
 		any map = "",
 		boolean forceLowercaseKeys = false
 	){
-		var ret = list(
-				where = where,
-				columns = columns,
-				limit = limit,
-				orderby = orderby,
-				row = row,
-				offset = offset,
-				excludeKeys = excludeKeys,
-				cachedWithin = cachedWithin,
-				returnType = "array",
-				map = map,
-				forceLowercaseKeys = forceLowercaseKeys
-			);
+		// Must have the return type as an array.
+		arguments.returnType = "array";
 
+		var ret = list( argumentCollection:arguments );
 		return !!row ? ret[ 1 ] : ret;
 
-  }
+	}
 
-  /**
-  * I return a struct representation of the object in its current state.
-  **/
-	public struct function toStruct( array excludeKeys = [], numeric top = 0, boolean preserveCase = true, numeric nestLevel = 1, boolean threaded = get__threaded() ){
-
+	/**
+	* I return a struct representation of the object in its current state.
+	**/
+	public struct function toStruct( array excludeKeys = [], numeric top = 0, boolean preserveCase = true, numeric nestLevel = 1, boolean threaded = get__threaded() )
+	{
 			var arg = "";
 			var LOCAL = {};
 			var returnStruct = {};
@@ -2600,8 +2711,8 @@ component accessors="true" output="false" {
 	}
 
 	/**
-    * I return a JSON representation of the object in its current state.
-    **/
+	* I return a JSON representation of the object in its current state.
+	**/
 	public string function toJSON( array excludeKeys = [], numeric top = 0, boolean preserveCase = true ){
 		try {
 			return serializeJSON( this.toStruct( excludeKeys = excludeKeys, top = top, preserveCase = preserveCase ) );
@@ -2611,8 +2722,8 @@ component accessors="true" output="false" {
 	}
 
 	/**
-    * I save the current state to the database. I either insert or update based on the isNew flag
-    **/
+	* I save the current state to the database. I either insert or update based on the isNew flag
+	**/
 	public any function save( struct overrides = {}, boolean force = false, any callback, string parentTable = "" ){
 		var tempID = this.getID();
 		var callbackArgs = { ID = this.getID(), method = 'save' };
@@ -2695,7 +2806,7 @@ component accessors="true" output="false" {
 			}
 
 			/*
-            // attach parent ID to child
+			// attach parent ID to child
 			for ( var i = 1; i LT arrayLen( variables.meta.properties ); i++ ){
 				var col = variables.meta.properties[ i ];
 
@@ -2715,12 +2826,12 @@ component accessors="true" output="false" {
 			}
 
 			callbackArgs.newID = variables['ID'] = this['ID'] = newID;
-            tempID = newID;
+			tempID = newID;
 
-            // This is the second pass of the child save routine.
-            // This pass will pick up those one-to-many relationships and
-            // persist the data with the new parent ID (this parent)
-            // logIt('Saving the children with the parent id of #tempID#');
+			// This is the second pass of the child save routine.
+			// This pass will pick up those one-to-many relationships and
+			// persist the data with the new parent ID (this parent)
+			// logIt('Saving the children with the parent id of #tempID#');
 			_saveTheChildren( tempID );
 
 			// Run afterInsert function.
@@ -2927,8 +3038,8 @@ component accessors="true" output="false" {
 	}
 
 	/**
-    * I delete the current record
-    **/
+	* I delete the current record
+	**/
 	public void function delete( boolean soft = false, any callback ){
 		var callbackArgs = { ID = getID(), method = 'delete', deletedChildren = []};
 		// Run beforeDelete function.  If it returns anything we'll
@@ -3141,15 +3252,15 @@ component accessors="true" output="false" {
 
 	/* SETUP/ALTER TABLE */
 	/**
-    * I drop the current table.
-    **/
+	* I drop the current table.
+	**/
 	private void function dropTable(){
 		variables.dao.dropTable( this.getTable() );
 	}
 
 	/**
-    * I create a table based on the current object's properties.
-    **/
+	* I create a table based on the current object's properties.
+	**/
 	private function makeTable(){
 		// Throw a helpful error message if the Norm was instantiated directly.
 		if( listLast( variables.meta.name , '.' ) == "Norm"){
